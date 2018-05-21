@@ -3,6 +3,9 @@
 Created on Fri Apr 20 09:24:56 2018
 
 @author: th84sn
+
+some of the functions in this script were inspired by Frank Leuenberger, who has taken the course before me.
+A lot of the code has also been created with the help of stackoverflow and the Udacity training material
 """
 
 import string
