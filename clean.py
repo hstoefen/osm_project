@@ -1,169 +1,52 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
-Cleaning of data
+Created on Fri Apr 20 09:24:56 2018
 
+@author: th84sn
 """
 
-import csv
-import codecs
-import pprint
+import string
 import re
-import xml.etree.cElementTree as ET
 
-#import cerberus
+def clean_street(street, handcleaning):
+    if street.lower().rfind('strasse') != -1: # convert to lower and look for 'strasse'
+        return string.replace(street,'trasse','traße') # return street with 'trasse' replaced by 'traße' in order to preserve capitals
+    elif street.lower().rfind('str.') != -1: # not found, then look for 'str.'
+        return string.replace(street,'str.','straße') # return street with 'str.' replaced by 'straße'
+    
+    # hand cleaned street names
+    if handcleaning:
+        if street.lower().rfind('schloss') != -1: # find Schloss/Schloß (castle), which also has the problematic letter ß
+            return string.replace(street,'chloss','chloß') # replace 'ss' with 'ß'    
+        if street == 'Scandinavian Park' or street == 'Scandinavien-Park':
+            return 'Scandinavian-Park'
+        if street == 'Geheimrat-Dr.-Schaedel-Straße':
+            return 'Geheimrat-Doktor-Schaedel-Straße'
+    
+    return street
 
-import schema
+def clean_postal_code(postal_code):
+    postal_code_area = re.compile(r'^2[0-5]{1}[0-9]{3}') # regex for postal codes in northern Germany
+    if postal_code_area.search(postal_code):
+        return postal_code
+    else:
+        return u'no valid postal code'
 
-OSM_PATH = "flensburg_sample.osm"
-
-NODES_PATH = "nodes.csv"
-NODE_TAGS_PATH = "nodes_tags.csv"
-WAYS_PATH = "ways.csv"
-WAY_NODES_PATH = "ways_nodes.csv"
-WAY_TAGS_PATH = "ways_tags.csv"
-
-LOWER_COLON = re.compile(r'^([a-z]|_)+:([a-z]|_)+')
-PROBLEMCHARS = re.compile(r'[=\+/&<>;\'"\?%#$@\,\. \t\r\n]')
-
-SCHEMA = schema.schema
-
-# Make sure the fields order in the csvs matches the column order in the sql table schema
-NODE_FIELDS = ['id', 'lat', 'lon', 'user', 'uid', 'version', 'changeset', 'timestamp']
-NODE_TAGS_FIELDS = ['id', 'key', 'value', 'type']
-WAY_FIELDS = ['id', 'user', 'uid', 'version', 'changeset', 'timestamp']
-WAY_TAGS_FIELDS = ['id', 'key', 'value', 'type']
-WAY_NODES_FIELDS = ['id', 'node_id', 'position']
-
-
-def shape_element(element, node_attr_fields=NODE_FIELDS, way_attr_fields=WAY_FIELDS,
-                  problem_chars=PROBLEMCHARS, default_tag_type='regular'):
-    """Clean and shape node or way XML element to Python dict"""
-	
-    node_attribs = {}
-    way_attribs = {}
-    way_nodes = []
-    tags = []  # Handle secondary tags the same way for both node and way elements
-    tag_type = default_tag_type
-    nd_pos = 0
-
-    # parse tags for nodes and ways
-    tags_dict = {}
-    for tag in element.iter('tag'):
-        if not problem_chars.search(tag.attrib['k']):
-            tag_key = tag.attrib['k']
-            if ':' in tag.attrib['k']:
-                tag_split = re.split(':',tag.attrib['k'], maxsplit=1)
-                tag_type = tag_split[0]
-                tag_key = tag_split[1]
-            tags_dict = { \
-                         'id': element.attrib['id'], \
-                         'key': tag_key, \
-                         'value': tag.attrib['v'], \
-                         'type': tag_type \
-                         }
-            tags.append(tags_dict)
-
-    # parse nd tags for ways
-    nd_dict = {}
-    for tag in element.iter('nd'):
-        nd_dict = { \
-                   'id': element.attrib['id'], \
-                   'node_id': tag.attrib['ref'], \
-                   'position': nd_pos \
-                   }
-        way_nodes.append(nd_dict)
-        nd_pos += 1
-
-    # return dictionaries for nodes and ways	
-    if element.tag == 'node':
-        for node_field in node_attr_fields:
-            node_attribs[node_field] = element.attrib[node_field]
-        #print tags
-        return {'node': node_attribs, 'node_tags': tags}
-    elif element.tag == 'way':
-        for way_field in way_attr_fields:
-            way_attribs[way_field] = element.attrib[way_field]        
-        return {'way': way_attribs, 'way_nodes': way_nodes, 'way_tags': tags}
-
-
-# ================================================== #
-#               Helper Functions                     #
-# ================================================== #
-def get_element(osm_file, tags=('node', 'way', 'relation')):
-    """Yield element if it is the right type of tag"""
-
-    context = ET.iterparse(osm_file, events=('start', 'end'))
-    _, root = next(context)
-    for event, elem in context:
-        if event == 'end' and elem.tag in tags:
-            yield elem
-            root.clear()
-
-# Python 2.7
-#class UnicodeDictWriter(csv.DictWriter, object):
-#    """Extend csv.DictWriter to handle Unicode input"""
-
-#    def writerow(self, row):
-#        super(UnicodeDictWriter, self).writerow({
-#            k: (v.encode('utf-8') if isinstance(v, unicode) else v) for k, v in row.iteritems()
-#        })
-
-#    def writerows(self, rows):
-#        for row in rows:
-#            self.writerow(row)
-
-# Python 3.6
-class UnicodeDictWriter(csv.DictWriter, object):
-    """Extend csv.DictWriter to handle Unicode input"""
-
-    def writerow(self, row):
-        super(UnicodeDictWriter, self).writerow({
-            k: (v.encode('utf-8') if isinstance(v, str) else v) for k, v in iter(row.items())
-        })
-
-    def writerows(self, rows):
-        for row in rows:
-            self.writerow(row)
-
-# ================================================== #
-#               Main Function                        #
-# ================================================== #
-def process_map(file_in):
-    """Iteratively process each XML element and write to csv(s)"""
-
-    with codecs.open(NODES_PATH, 'w') as nodes_file, \
-         codecs.open(NODE_TAGS_PATH, 'w') as nodes_tags_file, \
-         codecs.open(WAYS_PATH, 'w') as ways_file, \
-         codecs.open(WAY_NODES_PATH, 'w') as way_nodes_file, \
-         codecs.open(WAY_TAGS_PATH, 'w') as way_tags_file:
-
-        nodes_writer = UnicodeDictWriter(nodes_file, NODE_FIELDS)
-        node_tags_writer = UnicodeDictWriter(nodes_tags_file, NODE_TAGS_FIELDS)
-        ways_writer = UnicodeDictWriter(ways_file, WAY_FIELDS)
-        way_nodes_writer = UnicodeDictWriter(way_nodes_file, WAY_NODES_FIELDS)
-        way_tags_writer = UnicodeDictWriter(way_tags_file, WAY_TAGS_FIELDS)
-
-        nodes_writer.writeheader()
-        node_tags_writer.writeheader()
-        ways_writer.writeheader()
-        way_nodes_writer.writeheader()
-        way_tags_writer.writeheader()
-
-        for element in get_element(file_in, tags=('node', 'way')):
-            el = shape_element(element)
-            if el:
-                if element.tag == 'node':
-                    nodes_writer.writerow(el['node'])
-                    node_tags_writer.writerows(el['node_tags'])
-                elif element.tag == 'way':
-                    ways_writer.writerow(el['way'])
-                    way_nodes_writer.writerows(el['way_nodes'])
-                    way_tags_writer.writerows(el['way_tags'])
-
-
-if __name__ == '__main__':
-    # Note: Validation is ~ 10X slower. For the project consider using a small
-    # sample of the map when validating.
-    process_map(OSM_PATH)
+def clean_phone(phone):    
+    # convert phone numbers according to recommendation E.123 from ITU
+    # https://en.wikipedia.org/wiki/E.123
+     
+    phone = phone.translate(None,'/-(). ')             # remove all special characters commonly used in phone numbers, except +
+    if phone.startswith('00'):                    # replace leading 00 from country code with +
+        phone = phone.replace('00','+',1)
+    elif phone.startswith('0'):                    # replace leading 0 from area code with '+49 '
+        phone = phone.replace('0','+49',1)      
+    
+    l = list(phone)
+    if phone.startswith('+'):                    # add whitespace after two-digit country code and again after 3-digit area code (only for Germany)
+        l.insert(3, ' ')
+        if phone.startswith('+49'):
+            l.insert(7, ' ')
+        phone = ''.join(l)
+    
+    return phone
